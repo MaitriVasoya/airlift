@@ -589,25 +589,39 @@ public class ConfigurationFactory
         return finalValue;
     }
 
-    private static Object coerce(TypeToken<?> type, String value)
-    {
+    private static Object coerce(TypeToken<?> type, String value) {
         if (type.isPrimitive() && value == null) {
             return null;
         }
 
+        Object result = handlePrimitiveTypes(type, value);
+        if (result != null) return result;
+
+        result = handleStringAcceptingMethods(type, value);
+        if (result != null) return result;
+
+        result = handleEnumTypes(type, value);
+        if (result != null) return result;
+
+        result = handleCollectionTypes(type, value);
+        if (result != null) return result;
+
+        result = handleOptionalTypes(type, value);
+        if (result != null) return result;
+
+        result = handleValueOfMethod(type, value);
+        if (result != null) return result;
+
+        return handleConstructor(type, value);
+    }
+
+    private static Object handlePrimitiveTypes(TypeToken<?> type, String value) {
         try {
             if (String.class == type.getRawType()) {
                 return value;
             }
             if (Boolean.class == type.getRawType() || boolean.class == type.getRawType()) {
-                // Boolean.valueOf returns `false` when called with `"true "` argument
-                if ("true".equalsIgnoreCase(value)) {
-                    return Boolean.TRUE;
-                }
-                if ("false".equalsIgnoreCase(value)) {
-                    return Boolean.FALSE;
-                }
-                return null;
+                return parseBoolean(value);
             }
             if (Byte.class == type.getRawType() || byte.class == type.getRawType()) {
                 return Byte.valueOf(value);
@@ -627,100 +641,121 @@ public class ConfigurationFactory
             if (Double.class == type.getRawType() || double.class == type.getRawType()) {
                 return Double.valueOf(value);
             }
+        } catch (Exception ignored) {
+            // Ignore exceptions for built-in types
         }
-        catch (Exception ignored) {
-            // ignore the random exceptions from the built in types
-            return null;
+        return null;
+    }
+
+    private static Object parseBoolean(String value) {
+        if ("true".equalsIgnoreCase(value)) return Boolean.TRUE;
+        if ("false".equalsIgnoreCase(value)) return Boolean.FALSE;
+        return null;
+    }
+
+    private static Object handleStringAcceptingMethods(TypeToken<?> type, String value) {
+        Map<String, Method> methods = getStringAcceptingMethods(type);
+        Method fromString = methods.get("fromString");
+        if (fromString != null && type.isSubtypeOf(fromString.getGenericReturnType())) {
+            return invokeMethod(fromString, null, value);
         }
+        return null;
+    }
 
-        Map<String, Method> stringAcceptingMethods = stream(type.getRawType().getMethods())
-                .filter(ConfigurationFactory::acceptsSingleStringParameter)
-                .map(method -> Map.entry(method.getName(), method))
-                .collect(toImmutableMap(Map.Entry::getKey, Map.Entry::getValue));
-
-        // Look for a static fromString(String) methods. This is used in preference
-        // to the built-in valueOf() method for enums.
-        Method fromString = stringAcceptingMethods.get("fromString");
-        if (fromString != null) {
-            if (type.isSubtypeOf(fromString.getGenericReturnType())) {
-                try {
-                    return fromString.invoke(null, value);
-                }
-                catch (ReflectiveOperationException e) {
-                    return null;
-                }
-            }
-        }
-
+    private static Object handleEnumTypes(TypeToken<?> type, String value) {
         if (type.isSubtypeOf(TypeToken.of(Enum.class))) {
             try {
                 return Enum.valueOf(type.getRawType().asSubclass(Enum.class), value.toUpperCase(ENGLISH));
-            }
-            catch (IllegalArgumentException ignored) {
+            } catch (IllegalArgumentException ignored) {
             }
 
-            Object match = null;
-            for (Enum<?> option : type.getRawType().asSubclass(Enum.class).getEnumConstants()) {
-                String enumValue = value.replace("-", "_");
-                if (option.name().equalsIgnoreCase(enumValue)) {
-                    if (match != null) {
-                        // Ambiguity
-                        return null;
-                    }
-                    match = option;
-                }
-            }
-            return match;
+            return findMatchingEnum(type, value);
         }
+        return null;
+    }
 
+    private static Object handleCollectionTypes(TypeToken<?> type, String value) {
         if (type.isSubtypeOf(TypeToken.of(Set.class))) {
-            TypeToken<?> argumentToken = getActualTypeArgument(type);
-
+            TypeToken<?> elementType = getActualTypeArgument(type);
             return VALUE_SPLITTER.splitToStream(value)
-                    .map(item -> coerce(argumentToken, item))
+                    .map(item -> coerce(elementType, item))
                     .collect(toImmutableSet());
         }
 
         if (type.isSubtypeOf(TypeToken.of(List.class))) {
-            TypeToken<?> argumentToken = getActualTypeArgument(type);
-
+            TypeToken<?> elementType = getActualTypeArgument(type);
             return VALUE_SPLITTER.splitToStream(value)
-                    .map(item -> coerce(argumentToken, item))
+                    .map(item -> coerce(elementType, item))
                     .collect(toImmutableList());
-        }
-
-        if (type.isSubtypeOf(TypeToken.of(Optional.class))) {
-            TypeToken<?> argumentToken = getActualTypeArgument(type);
-            return Optional.ofNullable(coerce(argumentToken, value));
-        }
-
-        // Look for a static valueOf(String) method
-        Method valueOf = stringAcceptingMethods.get("valueOf");
-        if (valueOf != null) {
-            if (type.isSubtypeOf(valueOf.getGenericReturnType())) {
-                try {
-                    return valueOf.invoke(null, value);
-                }
-                catch (ReflectiveOperationException e) {
-                    return null;
-                }
-            }
-        }
-
-        // Look for a constructor taking a string
-        for (Constructor<?> constructor : type.getRawType().getConstructors()) {
-            if (acceptsSingleStringParameter(constructor)) {
-                try {
-                    return constructor.newInstance(value);
-                }
-                catch (ReflectiveOperationException e) {
-                    return null;
-                }
-            }
         }
 
         return null;
     }
+
+    private static Object handleOptionalTypes(TypeToken<?> type, String value) {
+        if (type.isSubtypeOf(TypeToken.of(Optional.class))) {
+            TypeToken<?> elementType = getActualTypeArgument(type);
+            return Optional.ofNullable(coerce(elementType, value));
+        }
+        return null;
+    }
+
+    private static Object handleValueOfMethod(TypeToken<?> type, String value) {
+        Map<String, Method> methods = getStringAcceptingMethods(type);
+        Method valueOf = methods.get("valueOf");
+        if (valueOf != null && type.isSubtypeOf(valueOf.getGenericReturnType())) {
+            return invokeMethod(valueOf, null, value);
+        }
+        return null;
+    }
+
+    private static Object handleConstructor(TypeToken<?> type, String value) {
+        for (Constructor<?> constructor : type.getRawType().getConstructors()) {
+            if (acceptsSingleStringParameter(constructor)) {
+                return instantiateConstructor(constructor, value);
+            }
+        }
+        return null;
+    }
+
+    private static Map<String, Method> getStringAcceptingMethods(TypeToken<?> type) {
+        return stream(type.getRawType().getMethods())
+                .filter(ConfigurationFactory::acceptsSingleStringParameter)
+                .map(method -> Map.entry(method.getName(), method))
+                .collect(toImmutableMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    private static Object invokeMethod(Method method, Object instance, String value) {
+        try {
+            return method.invoke(instance, value);
+        } catch (ReflectiveOperationException e) {
+            return null;
+        }
+    }
+
+    private static Object instantiateConstructor(Constructor<?> constructor, String value) {
+        try {
+            return constructor.newInstance(value);
+        } catch (ReflectiveOperationException e) {
+            return null;
+        }
+    }
+
+    private static Object findMatchingEnum(TypeToken<?> type, String value) {
+        Object match = null;
+        for (Enum<?> option : type.getRawType().asSubclass(Enum.class).getEnumConstants()) {
+            String enumValue = value.replace("-", "_");
+            if (option.name().equalsIgnoreCase(enumValue)) {
+                if (match != null) {
+                    // Ambiguity
+                    return null;
+                }
+                match = option;
+            }
+        }
+        return match;
+    }
+
 
     private static boolean acceptsSingleStringParameter(Executable executable)
     {
