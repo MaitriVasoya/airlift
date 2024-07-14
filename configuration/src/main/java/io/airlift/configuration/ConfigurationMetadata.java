@@ -757,7 +757,7 @@ public class ConfigurationMetadata<T>
 
         // just right
         if (getters.size() == 1) {
-            return getters.getFirst();
+            return getters.get(0);
         }
 
         // too small

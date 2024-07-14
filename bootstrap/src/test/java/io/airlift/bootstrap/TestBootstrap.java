@@ -67,7 +67,7 @@ public class TestBootstrap
     public void testUnusedProperty()
     {
         Bootstrap bootstrap = new Bootstrap()
-                .setRequiredConfigurationProperty("test-required", "foo");
+                .setConPro("test-required", "foo");
 
         assertThatThrownBy(bootstrap::initialize)
                 .isInstanceOfSatisfying(ApplicationConfigurationException.class, e ->
@@ -97,7 +97,7 @@ public class TestBootstrap
         Bootstrap bootstrap = new Bootstrap(binder -> {
             throw new RuntimeException("happy user error");
         })
-                .setRequiredConfigurationProperty("test-required", "foo");
+                .setConPro("test-required", "foo");
 
         assertThatThrownBy(bootstrap::initialize)
                 .isInstanceOfSatisfying(ApplicationConfigurationException.class, e -> {

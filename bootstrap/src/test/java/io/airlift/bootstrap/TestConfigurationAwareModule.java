@@ -33,8 +33,8 @@ public class TestConfigurationAwareModule
     {
         Injector injector = new Bootstrap(new FooModule())
                 .doNotInitializeLogging()
-                .setRequiredConfigurationProperty("foo.enabled", "true")
-                .setRequiredConfigurationProperty("bar.enabled", "true")
+                .setConPro("foo.enabled", "true")
+                .setConPro("bar.enabled", "true")
                 .initialize();
 
         assertThat(injector.getInstance(Key.get(String.class, named("foo")))).isEqualTo("fooInstance");
@@ -78,8 +78,8 @@ public class TestConfigurationAwareModule
 
         Injector injector = new Bootstrap(combined)
                 .doNotInitializeLogging()
-                .setRequiredConfigurationProperty("foo.enabled", "true")
-                .setRequiredConfigurationProperty("bar.enabled", "true")
+                .setConPro("foo.enabled", "true")
+                .setConPro("bar.enabled", "true")
                 .initialize();
 
         assertThat(injector.getInstance(Key.get(String.class, named("foo")))).isEqualTo("fooInstance");

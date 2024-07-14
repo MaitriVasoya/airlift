@@ -85,7 +85,7 @@ class RequestTimingEventHandler
         if (writeBeginTimestamps.isEmpty()) {
             return getRequestBeginToHandle(attributes);
         }
-        return writeBeginTimestamps.getFirst();
+        return writeBeginTimestamps.get(0);
     }
 
     private static long getLastByte(Map<String, Object> attributes)
@@ -94,7 +94,7 @@ class RequestTimingEventHandler
         if (writeEndTimestamps.isEmpty()) {
             return getRequestBeginToEnd(attributes);
         }
-        return writeEndTimestamps.getLast();
+        return writeEndTimestamps.get(0);
     }
 
     static long getRequestBeginToHandle(Map<String, Object> attributes)

@@ -45,7 +45,7 @@ public class TestTracingModule
         Injector injector = new Bootstrap(
                 new TestingNodeModule(),
                 new TracingModule("testService", "testVersion"))
-                .setRequiredConfigurationProperty("tracing.enabled", "true")
+                .setConPro("tracing.enabled", "true")
                 .quiet()
                 .initialize();
 

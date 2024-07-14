@@ -68,7 +68,7 @@ public class Bootstrap
     private final Logger log = Logger.get("Bootstrap");
     private final List<Module> modules;
 
-    private Map<String, String> requiredConfigurationProperties;
+    private Map<String, String> reqConPro;
     private Map<String, String> optionalConfigurationProperties;
     private boolean initializeLogging = true;
     private boolean quiet;
@@ -86,21 +86,21 @@ public class Bootstrap
         this.modules = ImmutableList.copyOf(modules);
     }
 
-    public Bootstrap setRequiredConfigurationProperty(String key, String value)
-    {
-        if (this.requiredConfigurationProperties == null) {
-            this.requiredConfigurationProperties = new TreeMap<>();
+    public Bootstrap setConPro(String key, String value) {
+        if (this.reqConPro == null) {
+            this.reqConPro = new TreeMap<>();
         }
-        this.requiredConfigurationProperties.put(key, value);
+        this.reqConPro.put(key, value);
         return this;
     }
 
+
     public Bootstrap setRequiredConfigurationProperties(Map<String, String> requiredConfigurationProperties)
     {
-        if (this.requiredConfigurationProperties == null) {
-            this.requiredConfigurationProperties = new TreeMap<>();
+        if (this.reqConPro == null) {
+            this.reqConPro = new TreeMap<>();
         }
-        this.requiredConfigurationProperties.putAll(requiredConfigurationProperties);
+        this.reqConPro.putAll(requiredConfigurationProperties);
         return this;
     }
 
@@ -137,92 +137,103 @@ public class Bootstrap
     /**
      * Validate configuration and return used properties.
      */
-    public Set<String> configure()
-    {
+    public Set<String> configure() {
         checkState(state == State.UNINITIALIZED, "Already configured");
         state = State.CONFIGURED;
 
-        Logging logging = null;
-        if (initializeLogging) {
-            logging = Logging.initialize();
+        Logging logging = initializeLoggingIfRequired();
+
+        Map<String, String> requiredProperties = loadRequiredProperties();
+        Map<String, String> properties = combinePropertySources(requiredProperties);
+
+        Map<String, String> unusedProperties = new TreeMap<>(requiredProperties);
+        List<Message> errors = new ArrayList<>();
+        List<Message> warnings = new ArrayList<>();
+        properties = replaceEnvironmentVariables(properties, System.getenv(), (key, error) -> {
+            unusedProperties.remove(key);
+            errors.add(new Message(error));
+        });
+
+        initializeConfigurationFactory(properties, errors, warnings);
+
+        Boolean quietConfig = configurationFactory.build(BootstrapConfig.class).isQuiet();
+        initializeLogging(logging);
+
+        validateConfiguration(errors, unusedProperties);
+        if (!errors.isEmpty()) {
+            throw new ApplicationConfigurationException(errors, warnings);
         }
 
-        Map<String, String> requiredProperties;
-        if (requiredConfigurationProperties == null) {
-            // initialize configuration
-            log.info("Loading configuration");
+        logEffectiveConfiguration(quietConfig);
+        logWarnings(warnings);
 
-            requiredProperties = Collections.emptyMap();
+        return configurationFactory.getUsedProperties();
+    }
+
+    private Logging initializeLoggingIfRequired() {
+        if (initializeLogging) {
+            return Logging.initialize();
+        }
+        return null;
+    }
+
+    private Map<String, String> loadRequiredProperties() {
+        if (reqConPro == null) {
+            log.info("Loading configuration");
+            Map<String, String> requiredProperties = Collections.emptyMap();
             String configFile = System.getProperty("config");
             if (configFile != null) {
                 try {
                     requiredProperties = loadPropertiesFrom(configFile);
-                }
-                catch (IOException e) {
+                } catch (IOException e) {
                     throw new UncheckedIOException(e);
                 }
             }
+            return requiredProperties;
+        } else {
+            return reqConPro;
         }
-        else {
-            requiredProperties = requiredConfigurationProperties;
-        }
-        Map<String, String> unusedProperties = new TreeMap<>(requiredProperties);
+    }
 
-        // combine property sources
+    private Map<String, String> combinePropertySources(Map<String, String> requiredProperties) {
         Map<String, String> properties = new HashMap<>();
         if (optionalConfigurationProperties != null) {
             properties.putAll(optionalConfigurationProperties);
         }
         properties.putAll(requiredProperties);
         properties.putAll(getSystemProperties());
+        return properties;
+    }
 
-        // replace environment variables in property values
-        List<Message> errors = new ArrayList<>();
-        properties = replaceEnvironmentVariables(properties, System.getenv(), (key, error) -> {
-            unusedProperties.remove(key);
-            errors.add(new Message(error));
-        });
-
-        // create configuration factory
+    private void initializeConfigurationFactory(Map<String, String> properties, List<Message> errors, List<Message> warnings) {
         properties = ImmutableSortedMap.copyOf(properties);
-
-        List<Message> warnings = new ArrayList<>();
         configurationFactory = new ConfigurationFactory(properties, warning -> warnings.add(new Message(warning)));
+        errors.addAll(configurationFactory.registerConfigurationClasses(modules));
+        errors.addAll(configurationFactory.validateRegisteredConfigurationProvider());
+    }
 
-        Boolean quietConfig = configurationFactory.build(BootstrapConfig.class).isQuiet();
-
-        // initialize logging
+    private void initializeLogging(Logging logging) {
         if (logging != null) {
             log.info("Initializing logging");
             LoggingConfiguration configuration = configurationFactory.build(LoggingConfiguration.class);
             logging.configure(configuration);
         }
+    }
 
-        // Register configuration classes defined in the modules
-        errors.addAll(configurationFactory.registerConfigurationClasses(modules));
-
-        // Validate configuration classes
-        errors.addAll(configurationFactory.validateRegisteredConfigurationProvider());
-
-        // at this point all config file properties should be used
-        // so we can calculate the unused properties
+    private void validateConfiguration(List<Message> errors, Map<String, String> unusedProperties) {
         unusedProperties.keySet().removeAll(configurationFactory.getUsedProperties());
-
         for (String key : unusedProperties.keySet()) {
             errors.add(new Message(format("Configuration property '%s' was not used", key)));
         }
+    }
 
-        // If there are configuration errors, fail-fast to keep output clean
-        if (!errors.isEmpty()) {
-            throw new ApplicationConfigurationException(errors, warnings);
-        }
-
-        // Log effective configuration
+    private void logEffectiveConfiguration(Boolean quietConfig) {
         if (!((quietConfig == null) ? quiet : quietConfig)) {
             logConfiguration(configurationFactory);
         }
+    }
 
-        // Log any warnings
+    private void logWarnings(List<Message> warnings) {
         if (!warnings.isEmpty()) {
             StringBuilder message = new StringBuilder();
             message.append("Configuration warnings\n");
@@ -235,9 +246,8 @@ public class Bootstrap
             message.append("==========");
             log.warn(message.toString());
         }
-
-        return configurationFactory.getUsedProperties();
     }
+
 
     public Injector initialize()
     {
